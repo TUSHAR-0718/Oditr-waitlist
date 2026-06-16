@@ -1,0 +1,241 @@
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400;500;600;700;800;900&family=Geist+Mono:wght@300;400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 0 0% 4%;
+  --muted: 0 0% 40%;
+  --border: 0 0% 92%;
+  --accent: 0 0% 7%;
+  --radius: 9999px;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #ffffff;
+  color: #0a0a0a;
+  font-family: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* Allow native horizontal panning when the user has zoomed in */
+html.is-zoomed,
+html.is-zoomed body {
+  overflow: auto !important;
+  overscroll-behavior: auto !important;
+}
+html.is-zoomed .lenis {
+  overflow: auto !important;
+}
+
+body {
+  min-height: 100vh;
+}
+
+::selection {
+  background: #0a0a0a;
+  color: #ffffff;
+}
+
+/* Lenis smooth scroll */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+/* Utility classes */
+.font-mono {
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+/* Hide scrollbar visually for premium feel but keep functionality */
+::-webkit-scrollbar {
+  width: 0px;
+  background: transparent;
+}
+
+/* Hero glyph mask shimmer */
+@keyframes slow-drift {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(20px, -10px, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.drift-slow {
+  animation: slow-drift 18s ease-in-out infinite;
+}
+
+/* Marquee-like atmosphere keyword container */
+.atmosphere-keyword {
+  position: absolute;
+  font-family: "Geist Mono", monospace;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #0a0a0a;
+  opacity: 0.04;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* Underline reveal */
+.link-underline {
+  position: relative;
+  display: inline-block;
+}
+.link-underline::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  width: 100%;
+  height: 1px;
+  background: #0a0a0a;
+  transform: scaleX(0);
+  transform-origin: right center;
+  transition: transform 0.5s cubic-bezier(0.65, 0, 0.35, 1);
+}
+.link-underline:hover::after {
+  transform: scaleX(1);
+  transform-origin: left center;
+}
+
+/* Magnetic hover for primary button */
+.btn-primary-magnetic {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.btn-primary-magnetic::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #ffffff;
+  transform: translateY(100%);
+  transition: transform 0.55s cubic-bezier(0.76, 0, 0.24, 1);
+  z-index: -1;
+}
+.btn-primary-magnetic:hover::before {
+  transform: translateY(0);
+}
+.btn-primary-magnetic .btn-text {
+  transition: color 0.55s cubic-bezier(0.76, 0, 0.24, 1);
+}
+.btn-primary-magnetic:hover .btn-text {
+  color: #0a0a0a;
+}
+.btn-primary-magnetic:hover {
+  border-color: #0a0a0a;
+}
+
+/* Capability tile hover */
+.capability-tile {
+  transition: background-color 0.45s ease, color 0.45s ease;
+}
+.capability-tile:hover {
+  background-color: #0a0a0a;
+  color: #ffffff;
+}
+.capability-tile:hover .capability-number,
+.capability-tile:hover .capability-desc {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Tighten letter-spacing for huge type */
+.tracking-hero {
+  letter-spacing: -0.07em;
+}
+
+/* ------------------------------------------------------------- */
+/*  Custom cursor                                                */
+/* ------------------------------------------------------------- */
+.custom-cursor-dot,
+.custom-cursor-ring {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 9998;
+  will-change: transform;
+  mix-blend-mode: difference;
+}
+
+.custom-cursor-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #ffffff;
+  transition: opacity 0.2s ease;
+}
+
+.custom-cursor-ring {
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  border: 1px solid #ffffff;
+  transition: width 0.25s cubic-bezier(0.65, 0, 0.35, 1),
+    height 0.25s cubic-bezier(0.65, 0, 0.35, 1),
+    border-color 0.25s ease, opacity 0.2s ease,
+    background-color 0.25s ease;
+}
+
+.custom-cursor-ring.is-hovering {
+  width: 56px;
+  height: 56px;
+  margin-left: -10px;
+  margin-top: -10px;
+  background-color: rgba(255, 255, 255, 0.06);
+  border-color: #ffffff;
+}
+
+@media (pointer: fine) {
+  html.has-custom-cursor,
+  html.has-custom-cursor body,
+  html.has-custom-cursor * {
+    cursor: none !important;
+  }
+}
+
+/* Hide custom cursor while zoomed (native cursor is more accurate) */
+html.is-zoomed .custom-cursor-dot,
+html.is-zoomed .custom-cursor-ring {
+  display: none;
+}
+html.is-zoomed.has-custom-cursor,
+html.is-zoomed.has-custom-cursor * {
+  cursor: auto !important;
+}
