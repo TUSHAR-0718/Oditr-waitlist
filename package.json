@@ -1,0 +1,10 @@
+{
+  "name": "oditr-waitlist-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "cd frontend && yarn dev",
+    "build": "cd frontend && yarn install && yarn build",
+    "start": "cd frontend && yarn start"
+  }
+}
