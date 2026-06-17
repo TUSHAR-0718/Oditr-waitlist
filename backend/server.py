@@ -2,39 +2,27 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from supabase import create_client
 from email_service import send_waitlist_confirmation
 import os
 import logging
 import secrets
 import string
-import socket
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from typing import Optional
 import uuid
 from datetime import datetime, timezone
-import certifi
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 from auth import create_access_token, verify_token, pwd_context, ADMIN_USERNAME, ADMIN_PASSWORD_HASH
 
-# --- MONKEYPATCH: Force IPv4 for MongoDB Atlas ---
-# Some ISPs use DNS64/NAT64 which resolves Atlas to IPv6. 
-# Atlas Free clusters (M0) drop IPv6 connections, causing TLSV1_ALERT_INTERNAL_ERROR.
-old_getaddrinfo = socket.getaddrinfo
-def new_getaddrinfo(*args, **kwargs):
-    responses = old_getaddrinfo(*args, **kwargs)
-    return [res for res in responses if res[0] == socket.AF_INET]
-socket.getaddrinfo = new_getaddrinfo
-# -------------------------------------------------
-
-mongo_url = os.environ['MONGO_URL']
-# Use certifi's CA bundle to ensure proper TLS 1.2+ with MongoDB Atlas
-client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
-db = client[os.environ['DB_NAME']]
+# Initialize Supabase client
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
+SUPABASE_KEY = os.environ.get('SUPABASE_ANON_KEY', '')
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Display baseline so the counter starts at a credible community size
 WAITLIST_BASELINE = int(os.environ.get('WAITLIST_BASELINE', '13'))
@@ -52,8 +40,8 @@ def gen_ref_code(length: int = 7) -> str:
 async def unique_ref_code() -> str:
     for _ in range(8):
         code = gen_ref_code()
-        existing = await db.waitlist.find_one({"referral_code": code}, {"_id": 0, "id": 1})
-        if not existing:
+        response = supabase.table("waitlist").select("id").eq("referral_code", code).execute()
+        if not response.data:
             return code
     # fallback to longer code
     return gen_ref_code(10)
@@ -63,17 +51,20 @@ async def compute_position(entry: dict) -> int:
     """Position = baseline + 1 + (# of entries with more referrals OR same referrals but earlier created_at)."""
     ref_count = entry.get("referral_count", 0)
     created_at = entry["created_at"]
-    # All stored entries persist created_at as an ISO string. Normalize to string
-    # so $lt comparison works regardless of the input type.
+    # Normalize to ISO string for comparison
     if isinstance(created_at, datetime):
         created_at_iso = created_at.isoformat()
     else:
         created_at_iso = str(created_at)
-    higher = await db.waitlist.count_documents({"referral_count": {"$gt": ref_count}})
-    same_earlier = await db.waitlist.count_documents({
-        "referral_count": ref_count,
-        "created_at": {"$lt": created_at_iso},
-    })
+    
+    # Count entries with more referrals
+    higher_response = supabase.table("waitlist").select("id", count="exact").gt("referral_count", ref_count).execute()
+    higher = higher_response.count or 0
+    
+    # Count entries with same referrals but earlier created_at
+    same_earlier_response = supabase.table("waitlist").select("id", count="exact").eq("referral_count", ref_count).lt("created_at", created_at_iso).execute()
+    same_earlier = same_earlier_response.count or 0
+    
     return higher + same_earlier + 1 + WAITLIST_BASELINE
 
 
@@ -112,25 +103,26 @@ async def join_waitlist(payload: WaitlistCreate):
     ref_code = (payload.ref or "").strip().lower() or None
 
     try:
-        existing = await db.waitlist.find_one({"email": email_normalized}, {"_id": 0})
+        # Check if email already exists
+        existing_response = supabase.table("waitlist").select("*").eq("email", email_normalized).execute()
+        existing = existing_response.data[0] if existing_response.data else None
     except Exception as e:
-        logger.exception("Database error during find_one")
+        logger.exception("Database error during lookup")
         raise HTTPException(status_code=500, detail="Database connection failed")
 
     if existing:
         # backfill referral_code if older record lacked one
         if not existing.get("referral_code"):
             new_code = await unique_ref_code()
-            await db.waitlist.update_one(
-                {"id": existing["id"]}, {"$set": {"referral_code": new_code}}
-            )
+            supabase.table("waitlist").update({"referral_code": new_code}).eq("id", existing["id"]).execute()
             existing["referral_code"] = new_code
         existing.setdefault("referral_count", 0)
         existing.setdefault("referred_by", None)
         if isinstance(existing["created_at"], str):
             existing["created_at"] = datetime.fromisoformat(existing["created_at"])
         position = await compute_position(existing)
-        count = await db.waitlist.count_documents({}) + WAITLIST_BASELINE
+        count_response = supabase.table("waitlist").select("id", count="exact").execute()
+        count = (count_response.count or 0) + WAITLIST_BASELINE
         return WaitlistResponse(
             id=existing["id"],
             email=existing["email"],
@@ -146,8 +138,8 @@ async def join_waitlist(payload: WaitlistCreate):
     # validate referrer
     referred_by = None
     if ref_code:
-        referrer = await db.waitlist.find_one({"referral_code": ref_code}, {"_id": 0, "id": 1})
-        if referrer:
+        referrer_response = supabase.table("waitlist").select("id").eq("referral_code", ref_code).execute()
+        if referrer_response.data:
             referred_by = ref_code
 
     new_code = await unique_ref_code()
@@ -160,17 +152,19 @@ async def join_waitlist(payload: WaitlistCreate):
         "referral_count": 0,
         "referred_by": referred_by,
     }
-    await db.waitlist.insert_one(entry)
+    supabase.table("waitlist").insert(entry).execute()
 
     if referred_by:
-        await db.waitlist.update_one(
-            {"referral_code": referred_by},
-            {"$inc": {"referral_count": 1}},
-        )
+        # Increment referral count for the referrer
+        referrer_response = supabase.table("waitlist").select("referral_count").eq("referral_code", referred_by).execute()
+        if referrer_response.data:
+            current_count = referrer_response.data[0].get("referral_count", 0)
+            supabase.table("waitlist").update({"referral_count": current_count + 1}).eq("referral_code", referred_by).execute()
 
     entry_for_position = {**entry, "created_at": now}
     position = await compute_position(entry_for_position)
-    count = await db.waitlist.count_documents({}) + WAITLIST_BASELINE
+    count_response = supabase.table("waitlist").select("id", count="exact").execute()
+    count = (count_response.count or 0) + WAITLIST_BASELINE
 
     # Send confirmation email (non-blocking, non-fatal)
     await send_waitlist_confirmation(email_normalized, position, new_code)
@@ -190,22 +184,25 @@ async def join_waitlist(payload: WaitlistCreate):
 
 @api_router.get("/waitlist/count", response_model=WaitlistCountResponse)
 async def waitlist_count():
-    count = await db.waitlist.count_documents({})
-    return WaitlistCountResponse(count=count + WAITLIST_BASELINE)
+    response = supabase.table("waitlist").select("id", count="exact").execute()
+    count = (response.count or 0) + WAITLIST_BASELINE
+    return WaitlistCountResponse(count=count)
 
 
 @api_router.get("/waitlist/code/{code}", response_model=WaitlistResponse)
 async def waitlist_by_code(code: str):
     code = code.strip().lower()
-    entry = await db.waitlist.find_one({"referral_code": code}, {"_id": 0})
-    if not entry:
+    response = supabase.table("waitlist").select("*").eq("referral_code", code).execute()
+    if not response.data:
         raise HTTPException(status_code=404, detail="Referral code not found")
+    entry = response.data[0]
     if isinstance(entry["created_at"], str):
         entry["created_at"] = datetime.fromisoformat(entry["created_at"])
     entry.setdefault("referral_count", 0)
     entry.setdefault("referred_by", None)
     position = await compute_position(entry)
-    count = await db.waitlist.count_documents({}) + WAITLIST_BASELINE
+    count_response = supabase.table("waitlist").select("id", count="exact").execute()
+    count = (count_response.count or 0) + WAITLIST_BASELINE
     return WaitlistResponse(
         id=entry["id"],
         email=entry["email"],
@@ -235,9 +232,10 @@ async def list_signups(
     _: str = Depends(verify_token)
 ):
     skip = (page - 1) * limit
-    cursor = db.waitlist.find({}, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit)
-    entries = await cursor.to_list(length=limit)
-    total = await db.waitlist.count_documents({})
+    response = supabase.table("waitlist").select("*").order("created_at", desc=True).range(skip, skip + limit - 1).execute()
+    entries = response.data or []
+    total_response = supabase.table("waitlist").select("id", count="exact").execute()
+    total = total_response.count or 0
     return {"total": total, "page": page, "entries": entries}
 
 
@@ -261,26 +259,10 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def backfill_waitlist():
     try:
-        # Older entries may pre-date the referral fields. Backfill defaults.
-        await db.waitlist.update_many(
-            {"referral_count": {"$exists": False}}, {"$set": {"referral_count": 0}}
-        )
-        await db.waitlist.update_many(
-            {"referred_by": {"$exists": False}}, {"$set": {"referred_by": None}}
-        )
         # Backfill referral_code for any entries missing one
-        cursor = db.waitlist.find({"referral_code": {"$in": [None, ""]}}, {"_id": 0, "id": 1})
-        async for entry in cursor:
+        missing_code_response = supabase.table("waitlist").select("id").is_("referral_code", "null").execute()
+        for entry in missing_code_response.data or []:
             code = await unique_ref_code()
-            await db.waitlist.update_one({"id": entry["id"]}, {"$set": {"referral_code": code}})
-        cursor2 = db.waitlist.find({"referral_code": {"$exists": False}}, {"_id": 0, "id": 1})
-        async for entry in cursor2:
-            code = await unique_ref_code()
-            await db.waitlist.update_one({"id": entry["id"]}, {"$set": {"referral_code": code}})
+            supabase.table("waitlist").update({"referral_code": code}).eq("id", entry["id"]).execute()
     except Exception as e:
         logger.warning(f"Startup backfill skipped (will retry on next request): {e}")
-
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
