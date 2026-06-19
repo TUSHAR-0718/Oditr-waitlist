@@ -49,6 +49,21 @@ let webpackConfig = {
         ],
       };
 
+      // Disable source maps for workers in development to avoid blob:// errors
+      if (process.env.NODE_ENV === 'development') {
+        webpackConfig.devtool = 'eval-source-map';
+        // Filter out problematic rules
+        webpackConfig.module.rules = webpackConfig.module.rules.map(rule => {
+          if (rule.test && rule.test.toString().includes('worker')) {
+            return {
+              ...rule,
+              options: { ...rule.options, sourceMap: false },
+            };
+          }
+          return rule;
+        });
+      }
+
       // Add health check plugin to webpack if enabled
       if (config.enableHealthCheck && healthPluginInstance) {
         webpackConfig.plugins.push(healthPluginInstance);
@@ -59,6 +74,36 @@ let webpackConfig = {
 };
 
 webpackConfig.devServer = (devServerConfig) => {
+  // Fix WebSocket connection for dev server
+  devServerConfig.client = {
+    ...devServerConfig.client,
+    webSocketURL: {
+      hostname: 'localhost',
+      pathname: '/ws',
+      port: process.env.PORT || 3000,
+      protocol: 'ws',
+    },
+  };
+
+  // Add CORS headers to allow backend requests
+  devServerConfig.headers = {
+    ...devServerConfig.headers,
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  };
+
+  // Proxy API calls to backend
+  devServerConfig.proxy = [
+    {
+      context: ['/api'],
+      target: process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000',
+      changeOrigin: true,
+      pathRewrite: { '^/api': '/api' },
+      ws: true,
+    },
+  ];
+
   // Add health check endpoints if enabled
   if (config.enableHealthCheck && setupHealthEndpoints && healthPluginInstance) {
     const originalSetupMiddlewares = devServerConfig.setupMiddlewares;
